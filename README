@@ -1,0 +1,105 @@
+1 2 3 (Solved all tasks)
+
+STEFAN MIRUNA ANDREEA 334CA
+
+SWITCH IMPLEMENTATION - HOMEWORK 1 LOCAL NETWORKS
+
+Useful data structures:
+- cam_table:
+	- a map associating mac_addresses with their corresponding interface
+	- is populated dynamically (each time the switch receives a frame, it 
+	learns that its mac address came on that specific interface)
+	- an entry in this cam_table has the format: (src_mac_address, interface)
+
+- interfaces_map:
+	- a map that associates an interface name (that's the key) with the 
+	actual interface (that's the value)
+
+- vlan_map:
+	- a map associating a port with it's vlan_id (if it is an access port) 
+	or with the letter "T" (if it is a trunck port)
+
+- interfaces:
+	- a list of all ports of the switch
+
+- port_states:
+	- a map associating trunck ports with their current state : BLOCKED or
+	DESIGNATED
+
+Implementation details:
+
+While reading the content from the input file (according to switch_id) in the 
+function read_input_from_file(), we populate the interfaces_map and the vlan_map,
+as well as the port_states map (we will set all trunck ports to blocked for the 
+moment). "port_states" will only contain trunck ports, as the access ports will 
+always be designated, so there is no need to store them.
+
+After reading from input file, we need to make the initializations for stp, as
+advised in the pseudocode on ocw. These are done in the init_for_stp() function.
+For the beginning, we consider the current switch as root bridge, so we need to 
+set both root_bid and own_bid (global variables) to the priority of the current
+switch, the path cost until root bridge to 0 (as this is the path to itself) and
+mark all its ports as DESIGNATED. 
+
+Once a packet is received, we update the content of the cam_table with the new 
+information and decide if the current packet is a bpdu or just a normal packet 
+that needs to be forwarded through non-blocked ports (as opposed to bpdu 
+packets, which can travel through blocked ports as well).
+
+- If we only need to redirect the frame, we call the function redirect_frame(),
+which first checks if the destination mac address is unicast or broadcast. If 
+it is unicast, we verify if the mac destination is already known
+by the switch, so we know exactly on which interface we should transmit the 
+packet. If the mac destination is not in the cam_table, we transmit the packet 
+on all ports except from the port on which it came from. We do the same thing 
+also when the mac destination address is broadcast. The actual frame redirection
+is implemented in the function handle_frame_redirection_according_to_vlan(), 
+which makes different checks on the port on which the frame was received and 
+on the port on wich the frame will leave the switch.
+	- If the frame comes from a trunck port and gets out also through a 
+	trunck port, we do not need to add or remove any headers, just to 
+	redirect the packet as it is.
+	- If it comes through an access port and leaves through a trunck port, 
+	we need to add the 802.1Q header for vlan tag.
+	- If it gets in through a trunck port and out through an access port, 
+	we have to remove the 802.1Q header from the packet.
+	- Finally, if it comes through an access port and goes out also through 
+	an access port, we don't need to add or remove anything, we just need to
+	check if the source and the destination are part of the same vlan.
+It is also worth mentioning that if the destination interface is trunck, we must
+make sure that it is not blocked.
+
+- If we received a bpdu packet, after extracting the bpdu_root_bridge_ID, 
+bpdu_sender_path_cost and bpdu_sender_bridge_ID, I implemented the stp pseudocode
+exactly as indicated on ocw: first check if the current switch was root bridge, 
+then check if the current bpdu packet was sent by a switch with a smaller bid. 
+In this case, this switch should become the new root bridge and send a new bpdu 
+packet on all the other trunck ports (different from the one on which we received
+the current bpdu packet). In order to create this new bpdu packet, I made a 
+separate function, create_bpdu_packet(), which further calls dedicated functions
+to populate each section of the bpdu frame, which, as stated on ocw, uses 802.2 
+Logical Link Control header encapsulation.
+	- in order to transform the mac source and destination addresses from 
+	strings to bytes, I have used binascii: first we remove the ':' 
+	characters, resulting a hex string, then the function converts each pair
+	of hex digits into the corresponding byte value.
+	- for the llc header, the bpdu header and the bpdu config I have used 
+	the default values from ocw or wireshark
+	- after obtaining all the values of each field in the bpdu frame, we 
+	should assemble everything into a struct, for which the format string 
+	"!6s6sHBBBHBBBQIQHHHHH" indicates how each data element should be packed
+	into bytes. Each character of this string specifies the type or size of 
+	data.
+		- "!" -> (big-endian) byte order
+		- "6s6s" -> two 6-byte strings (dest_mac and src_mac)
+		- "H" -> unsigned short (2 bytes) for llc length
+		- 3 x "B" -> 3 unsigned chars (1 byte) (for dsap, ssap, control)
+		and another 3 x "B" for proto_id, proto_version_id, bpdu_type
+		-"Q" -> unsigned long long (8 bytes) for root_bid
+		- "I" -> unsigned int (4 bytes) for root_path_cost
+		- "Q" -> unsigned long long (8 bytes) for own_bid
+		- 5 x "H" ->5 x unsigned short (2 bytes) for port_id, 
+		message_age, max_age, hello_time and forward_delay
+	- the create_bpdu_packet() function is also used in the 
+send_bpdu_every_sec() function, that every minute creates a new packet, checks 
+ if the current switch is root bridge and sends the bpdu packet on all other ports
